@@ -346,6 +346,9 @@ function createCLIParser(argv: string[]) {
         throw new CommandLineArgsError(message);
       }
 
+      const devDepsToInstall = [];
+      let shouldRunPackageManagerInstall = false;
+      let hasRunPackageInstall = false;
       const creationDirectory = path.resolve(process.cwd(), args.name ?? "");
 
       if (args.site) {
@@ -487,7 +490,7 @@ function createCLIParser(argv: string[]) {
             ) + "\n"
           );
 
-          await packageManager.install();
+          shouldRunPackageManagerInstall = true;
           pathToPackageJson = path.join(creationDirectory, "package.json");
           logger.log(
             `✨ Created ${path.relative(process.cwd(), pathToPackageJson)}`
@@ -517,8 +520,7 @@ function createCLIParser(argv: string[]) {
               )}?`
             ));
           if (shouldInstall) {
-            await packageManager.addDevDeps(`wrangler@${wranglerVersion}`);
-            logger.log(`✨ Installed wrangler`);
+            devDepsToInstall.push(`wrangler@${wranglerVersion}`);
           }
         }
       }
@@ -536,16 +538,11 @@ function createCLIParser(argv: string[]) {
             path.join(creationDirectory, "./tsconfig.json"),
             readFileSync(path.join(__dirname, "../templates/tsconfig.json"))
           );
-          await packageManager.addDevDeps(
-            "@cloudflare/workers-types",
-            "typescript"
-          );
+          devDepsToInstall.push("@cloudflare/workers-types");
+          devDepsToInstall.push("typescript");
           pathToTSConfig = path.join(creationDirectory, "tsconfig.json");
           logger.log(
-            `✨ Created ${path.relative(
-              process.cwd(),
-              pathToTSConfig
-            )}, installed @cloudflare/workers-types into devDependencies`
+            `✨ Created ${path.relative(process.cwd(), pathToTSConfig)}`
           );
         }
       } else {
@@ -566,13 +563,13 @@ function createCLIParser(argv: string[]) {
             "Would you like to install the type definitions for Workers into your package.json?"
           );
           if (shouldInstall) {
-            await packageManager.addDevDeps("@cloudflare/workers-types");
+            devDepsToInstall.push("@cloudflare/workers-types");
             // We don't update the tsconfig.json because
             // it could be complicated in existing projects
             // and we don't want to break them. Instead, we simply
             // tell the user that they need to update their tsconfig.json
             logger.log(
-              `✨ Installed @cloudflare/workers-types.\nPlease add "@cloudflare/workers-types" to compilerOptions.types in ${path.relative(
+              `🚨 Please add "@cloudflare/workers-types" to compilerOptions.types in ${path.relative(
                 process.cwd(),
                 pathToTSConfig
               )}`
@@ -589,6 +586,38 @@ function createCLIParser(argv: string[]) {
         !packageJsonContent.scripts?.start &&
         !packageJsonContent.scripts?.publish &&
         shouldCreatePackageJson;
+
+      async function installPackages(
+        shouldRunInstall: boolean,
+        depsToInstall: string[]
+      ) {
+        if (hasRunPackageInstall) {
+          return;
+        }
+        //lets install the devDeps they asked for
+        //and run their package manager's install command if needed
+        if (depsToInstall.length > 0) {
+          const formatter = new Intl.ListFormat("en", {
+            style: "long",
+            type: "conjunction",
+          });
+          await packageManager.addDevDeps(...depsToInstall);
+          const versionlessPackages = depsToInstall.map((dep) =>
+            dep === `wrangler@${wranglerVersion}` ? "wrangler" : dep
+          );
+
+          logger.log(
+            `✨ Installed ${formatter.format(
+              versionlessPackages
+            )} into devDependencies`
+          );
+        } else {
+          if (shouldRunInstall) {
+            await packageManager.install();
+          }
+        }
+        hasRunPackageInstall = true;
+      }
 
       async function writePackageJsonScriptsAndUpdateWranglerToml(
         isWritingScripts: boolean,
@@ -682,11 +711,21 @@ function createCLIParser(argv: string[]) {
               )}`
             );
 
+            await installPackages(
+              shouldRunPackageManagerInstall,
+              devDepsToInstall
+            );
+
             await writePackageJsonScriptsAndUpdateWranglerToml(
               shouldWritePackageJsonScripts,
               justCreatedWranglerToml,
               pathToPackageJson,
               "src/index.ts"
+            );
+          } else {
+            await installPackages(
+              shouldRunPackageManagerInstall,
+              devDepsToInstall
             );
           }
         }
@@ -716,12 +755,20 @@ function createCLIParser(argv: string[]) {
                 path.join(creationDirectory, "./src/index.js")
               )}`
             );
-
+            await installPackages(
+              shouldRunPackageManagerInstall,
+              devDepsToInstall
+            );
             await writePackageJsonScriptsAndUpdateWranglerToml(
               shouldWritePackageJsonScripts,
               justCreatedWranglerToml,
               pathToPackageJson,
               "src/index.js"
+            );
+          } else {
+            await installPackages(
+              shouldRunPackageManagerInstall,
+              devDepsToInstall
             );
           }
         }
